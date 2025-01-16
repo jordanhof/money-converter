@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Convertisseur de devises</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Roboto', sans-serif;
+      background-color: #f1f3f4;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: row; /* Afficher en 2 colonnes */
+      gap: 40px;
+      background: #fff;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      max-width: 900px;
+      width: 100%;
+    }
+
+    .currency-converter,
+    .currency-chart {
+      flex: 1;
+    }
+
+    h1 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 20px;
+    }
+
+    label {
+      font-size: 14px;
+      color: #555;
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    select,
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      box-sizing: border-box;
+      margin-bottom: 20px;
+      background-color: #fafafa;
+    }
+
+    .currency-converter {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between; /* Assure que le contenu est bien distribué */
+    }
+
+    .convert-btn {
+      margin: 0 auto;
+      background-color: #007bff;
+      color: #fff;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 80px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+      align-self: center; /* Centre le bouton horizontalement */
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .convert-btn img {
+      width: 20px;
+      height: 20px;
+    }
+
+    .chart-buttons {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+      gap: 10px;
+    }
+
+    .chart-buttons button {
+      background-color: #007bff;
+      color: #fff;
+      border: none;
+      padding: 8px 12px;
+      font-size: 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    canvas {
+      margin-top: 20px;
+      width: 100%;
+      height: 300px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Colonne de gauche -->
+    <div class="currency-converter">
+      <h1>Convertisseur de devises</h1>
+      <div>
+        <select v-model="baseCurrency">
+          <option v-for="(code, index) in currencies" :key="index" :value="code[0]">
+            {{ code[1] }} ({{ code[0] }})
+          </option>
+        </select>
+
+        <button class="convert-btn" @click="switchCurrencies"><img src="change.png"></button>
+
+        <select v-model="targetCurrency">
+          <option v-for="(code, index) in currencies" :key="index" :value="code[0]">
+            {{ code[1] }} ({{ code[0] }})
+          </option>
+        </select>
+      </div>
+
+      <div>
+        <label for="amount">Montant :</label>
+        <input type="number" v-model.number="amount" min="0.01" step="0.01" @input="convertCurrency" placeholder="Entrez un montant" />
+
+        <label for="convertedAmount">Converti :</label>
+        <input type="number" v-model.number="convertedAmount" readonly placeholder="Montant converti" />
+      </div>
+
+      <div>
+        <label for="historicalDate">Choisir une date :</label>
+        <input type="date" v-model="historicalDate" @change="fetchRateAtDate" />
+      </div>
+      
+    </div>
+
+    <!-- Colonne de droite (Graphique) -->
+    <div class="currency-chart">
+      <h1>Historique des taux</h1>
+      <div class="chart-buttons">
+        <button @click="fetchHistoricalData(12)">12 mois</button>
+        <button @click="fetchHistoricalData(60)">5 ans</button>
+        <button @click="fetchHistoricalData(120)">10 ans</button>
+      </div>
+      <canvas id="currencyChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, watch, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const apiKey = 'fab2c8ab7b7d387f51149f12';
+        const apiUrl = `https://v6.exchangerate-api.com/v6/${apiKey}/codes`;
+        const baseCurrency = ref('USD');
+        const targetCurrency = ref('EUR');
+        const amount = ref(1);
+        const convertedAmount = ref(null);
+        const currencies = ref([]);
+        const chartData = ref([]);
+        const chartLabels = ref([]);
+        const historicalDate = ref('');
+        const bannerText = ref('');
+        let chartInstance = null;
+
+        const fetchCurrencies = async () => {
+          try {
+            const response = await axios.get(apiUrl);
+            currencies.value = response.data.supported_codes;
+          } catch (error) {
+            console.error('Erreur lors du chargement des devises:', error);
+          }
+        };
+
+        const convertCurrency = async () => {
+          if (!baseCurrency.value || !targetCurrency.value) return;
+
+          try {
+            const conversionApiUrl = `https://v6.exchangerate-api.com/v6/${apiKey}/latest/${baseCurrency.value}`;
+            const response = await axios.get(conversionApiUrl);
+            const rate = response.data.conversion_rates[targetCurrency.value];
+
+            convertedAmount.value = (amount.value * rate).toFixed(2);
+          } catch (error) {
+            console.error('Erreur lors de la conversion:', error);
+          }
+        };
+
+        const fetchRateAtDate = async () => {
+          if (!historicalDate.value || !baseCurrency.value || !targetCurrency.value) return;
+
+          try {
+            const date = new Date(historicalDate.value);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+
+            const url = `https://v6.exchangerate-api.com/v6/${apiKey}/history/${baseCurrency.value}/${year}/${month}/${day}`;
+            const response = await axios.get(url);
+            const rate = response.data.conversion_rates[targetCurrency.value];
+
+            const historicalAmount = amount.value * rate;
+            convertedAmount.value = historicalAmount.toFixed(2);
+          } catch (error) {
+            console.error('Erreur lors de la récupération du taux pour la date sélectionnée:', error);
+          }
+        };
+
+        const switchCurrencies = () => {
+          [baseCurrency.value, targetCurrency.value] = [targetCurrency.value, baseCurrency.value];
+          fetchHistoricalData(12);
+        };
+
+        const fetchHistoricalData = async (months) => {
+          if (!baseCurrency.value || !targetCurrency.value) return;
+
+          try {
+            const historicalData = [];
+            const labels = [];
+            const today = new Date();
+
+            for (let i = 0; i < months; i++) {
+              const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+              const month = date.toLocaleString('default', { month: 'short' });
+              const year = date.getFullYear();
+
+              const url = `https://v6.exchangerate-api.com/v6/${apiKey}/history/${baseCurrency.value}/${year}/${String(date.getMonth() + 1).padStart(2, '0')}/01`;
+              const response = await axios.get(url);
+              const rate = response.data.conversion_rates[targetCurrency.value];
+
+              historicalData.push(rate);
+              labels.push(`${month} ${year}`);
+            }
+
+            chartData.value = historicalData.reverse();
+            chartLabels.value = labels.reverse();
+            renderChart(chartLabels.value, chartData.value);
+          } catch (error) {
+            console.error('Erreur lors de la récupération des données historiques:', error);
+          }
+        };
+
+        const renderChart = (labels, data) => {
+          const ctx = document.getElementById('currencyChart').getContext('2d');
+
+          if (chartInstance) {
+            chartInstance.destroy();
+          }
+
+          chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: `Taux de change de ${baseCurrency.value} à ${targetCurrency.value}`,
+                  data,
+                  borderColor: 'rgba(75, 192, 192, 1)',
+                  backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                  borderWidth: 3,
+                  tension: 0.3,
+                  pointRadius: 0,
+                  pointHoverRadius: 0,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+            },
+          });
+        };
+
+        onMounted(() => {
+          fetchCurrencies();
+          fetchHistoricalData(12);
+        });
+
+        return {
+          baseCurrency,
+          targetCurrency,
+          amount,
+          convertedAmount,
+          currencies,
+          historicalDate,
+          convertCurrency,
+          switchCurrencies,
+          fetchRateAtDate,
+          fetchHistoricalData,
+        };
+      },
+    }).mount('#app');
+  </script>
+</body>
+</html>
